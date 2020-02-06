@@ -4,7 +4,7 @@ use debug_adapter::{DebugAdapter, Event};
 use debugserver_types::*;
 use probe_rs::probe::{DebugProbe, DebugProbeError};
 
-use probe_rs::probe::daplink;
+use probe_rs::probe::{daplink, stlink};
 
 use probe_rs;
 use probe_rs::config::registry::Registry;
@@ -42,6 +42,8 @@ use std::net::{SocketAddr, TcpListener};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
+use std::fmt::format;
+
 fn main() -> Result<(), debug_adapter::Error> {
     let matches = App::new("probe-rs - Debug Adapter for vscode")
         .arg(Arg::with_name("server").long("server"))
@@ -65,6 +67,7 @@ fn main() -> Result<(), debug_adapter::Error> {
     if matches.is_present("server") {
         // Setup terminal logger
         let _ = TermLogger::init(log_level, cfg, TerminalMode::Mixed);
+        info!("-- here --");
 
         let port: u16 = matches
             .value_of("port")
@@ -298,7 +301,7 @@ impl Debugger {
 
                         info!("Attached to probe");
 
-                        adapter.log_to_console("Attached to probe")?;
+                        adapter.log_to_console("Attached to probe\n")?;
 
                         let resp = AttachResponse {
                             command: "attach".to_owned(),
@@ -314,8 +317,15 @@ impl Debugger {
 
                         adapter.send_data(&encoded_resp)?;
 
+                        let session = self.session.as_mut().unwrap();
+
+                        // clear all breakpoints on attach
+                        session
+                                .target
+                                .core
+                                .clear_all_breakpoints(&mut session.probe)?;
+
                         if self.breakpoints.len() > 0 {
-                            let session = self.session.as_mut().unwrap();
 
                             session
                                 .target
@@ -338,7 +348,7 @@ impl Debugger {
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to attacht to probe: {:?}", e);
+                        warn!("Failed to attach to probe: {:?}", e);
 
                         let resp = AttachResponse {
                             command: "attach".to_owned(),
@@ -359,6 +369,7 @@ impl Debugger {
             "disconnect" => {
                 let args: DisconnectArguments = get_arguments(req)?;
                 trace!("Arguments: {:?}", args);
+                adapter.log_to_console(format!("Disconnect {:?}\n", args))?;
 
                 let resp = DisconnectResponse {
                     command: "disconnect".to_owned(),
@@ -380,6 +391,7 @@ impl Debugger {
                 let args: SetBreakpointsArguments = get_arguments(req)?;
 
                 trace!("Arguments: {:?}", args);
+                adapter.log_to_console(format!("SetBreakpoints {:?}\n", args))?;
 
                 if let Some(session) = self.session.as_mut() {
                     session
@@ -982,11 +994,17 @@ struct AttachRequestArguments {
 }
 
 fn connect_to_probe(target: &str) -> Result<Session, DebugProbeError> {
-    let device = daplink::tools::list_daplink_devices()
-        .pop()
-        .ok_or(DebugProbeError::ProbeCouldNotBeCreated)?;
+    // let device = daplink::tools::list_daplink_devices()
+    //     .pop()
+    //     .ok_or(DebugProbeError::ProbeCouldNotBeCreated)?;
 
-    let mut link = daplink::DAPLink::new_from_probe_info(&device)?;
+    // let mut link = daplink::DAPLink::new_from_probe_info(&device)?;
+    // just pick the first one
+    let devs = stlink::tools::list_stlink_devices();
+    let device = devs.get(0).unwrap();
+    println!("device {:?}", device);
+    info!("Connect_to_probe {:?}", device);
+    let mut link = stlink::STLink::new_from_probe_info(&device).unwrap();
 
     link.attach(Some(probe_rs::probe::WireProtocol::Swd))?;
 
@@ -996,6 +1014,9 @@ fn connect_to_probe(target: &str) -> Result<Session, DebugProbeError> {
     let target = registry
         .get_target(SelectionStrategy::TargetIdentifier(target.into()))
         .expect("Failed to select target");
+
+    //    info!("Target : {:?}\n Probe : {:?}", target, probe);
+    // info!("Target : {:?}\n", target);
 
     Ok(Session::new(target, probe))
 }
